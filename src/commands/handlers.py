@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.aggregates.agent_session import AgentSessionAggregate
-from src.aggregates.loan_application import ApplicationState, LoanApplicationAggregate
+from src.aggregates.loan_application import LoanApplicationAggregate
 from src.event_store import EventStore
 from src.models.events import (
     AgentContextLoaded,
@@ -73,7 +73,7 @@ async def handle_submit_application(cmd: SubmitApplicationCommand, store: EventS
     return await store.append(
         stream_id=stream_id,
         events=[ev],
-        expected_version=-1,
+        expected_version=app.expected_version_for_append(),
         correlation_id=cmd.correlation_id,
         causation_id=cmd.causation_id,
         aggregate_type="LoanApplication",
@@ -81,6 +81,9 @@ async def handle_submit_application(cmd: SubmitApplicationCommand, store: EventS
 
 
 async def handle_start_agent_session(cmd: StartAgentSessionCommand, store: EventStore) -> int:
+    agent = await AgentSessionAggregate.load(store, cmd.agent_id, cmd.session_id)
+    agent.assert_new_session()
+
     ev = AgentContextLoaded(
         agent_id=cmd.agent_id,
         session_id=cmd.session_id,
@@ -93,7 +96,7 @@ async def handle_start_agent_session(cmd: StartAgentSessionCommand, store: Event
     return await store.append(
         stream_id=stream_id,
         events=[ev],
-        expected_version=-1,
+        expected_version=agent.expected_version_for_append(),
         correlation_id=cmd.correlation_id,
         causation_id=cmd.causation_id,
         aggregate_type="AgentSession",
@@ -129,7 +132,7 @@ async def handle_credit_analysis_completed(cmd: CreditAnalysisCompletedCommand, 
     return await store.append(
         stream_id=f"loan-{cmd.application_id}",
         events=new_events,
-        expected_version=app.version,
+        expected_version=app.expected_version_for_append(),
         correlation_id=cmd.correlation_id,
         causation_id=cmd.causation_id,
         aggregate_type="LoanApplication",
@@ -138,9 +141,7 @@ async def handle_credit_analysis_completed(cmd: CreditAnalysisCompletedCommand, 
 
 async def handle_credit_analysis_requested(application_id: str, assigned_agent_id: str, store: EventStore) -> int:
     app = await LoanApplicationAggregate.load(store, application_id)
-    if app.state is not None and app.state != ApplicationState.SUBMITTED:
-        # Keep minimal for now: only allow request right after submit
-        raise ValueError("Invalid state for CreditAnalysisRequested")
+    app.assert_allows_credit_analysis_requested()
 
     ev = CreditAnalysisRequested(
         application_id=application_id,
@@ -151,7 +152,7 @@ async def handle_credit_analysis_requested(application_id: str, assigned_agent_i
     return await store.append(
         stream_id=f"loan-{application_id}",
         events=[ev],
-        expected_version=app.version,
+        expected_version=app.expected_version_for_append(),
         aggregate_type="LoanApplication",
     )
 

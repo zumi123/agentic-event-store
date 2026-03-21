@@ -2,15 +2,28 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Literal
 
 import pytest
+from pydantic import Field
 
+from src.aggregates.loan_application import LoanApplicationAggregate
 from src.event_store import EventStore
 from src.models.events import (
     ApplicationSubmitted,
+    BaseEvent,
     CreditAnalysisCompleted,
+    CreditAnalysisRequested,
     OptimisticConcurrencyError,
 )
+
+
+class _ConcurrencyMechanicalSeed(BaseEvent):
+    """Test-only event: advances stream version without changing loan aggregate state."""
+
+    event_type: Literal["ConcurrencyMechanicalSeed"] = "ConcurrencyMechanicalSeed"
+    event_version: int = 1
+    note: str = Field(default="mechanical concurrency seed")
 
 
 @pytest.mark.asyncio
@@ -18,7 +31,7 @@ async def test_double_decision_concurrency(dsn: str) -> None:
     store = EventStore(dsn=dsn)
     stream_id = "loan-app-123"
 
-    # Seed stream to version 3
+    # Seed stream to version 3 with a valid state machine prefix ending in AwaitingAnalysis.
     submitted = ApplicationSubmitted(
         application_id="app-123",
         applicant_id="user-1",
@@ -27,7 +40,19 @@ async def test_double_decision_concurrency(dsn: str) -> None:
         submission_channel="api",
         submitted_at=datetime.now(tz=timezone.utc),
     )
-    v = await store.append(stream_id, [submitted, submitted, submitted], expected_version=-1, aggregate_type="LoanApplication")
+    requested = CreditAnalysisRequested(
+        application_id="app-123",
+        assigned_agent_id="agent-x",
+        requested_at=datetime.now(tz=timezone.utc),
+        priority=0,
+    )
+    seed = _ConcurrencyMechanicalSeed()
+    v = await store.append(
+        stream_id,
+        [submitted, requested, seed],
+        expected_version=-1,
+        aggregate_type="LoanApplication",
+    )
     assert v == 3
 
     async def attempt(agent_id: str):
@@ -42,7 +67,13 @@ async def test_double_decision_concurrency(dsn: str) -> None:
             analysis_duration_ms=123,
             input_data_hash="hash",
         )
-        return await store.append(stream_id, [ev], expected_version=3, aggregate_type="LoanApplication")
+        app = await LoanApplicationAggregate.load(store, "app-123")
+        return await store.append(
+            stream_id,
+            [ev],
+            expected_version=app.expected_version_for_append(),
+            aggregate_type="LoanApplication",
+        )
 
     results = await asyncio.gather(
         attempt("a1"),
