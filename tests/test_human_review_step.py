@@ -12,6 +12,7 @@ from src.models.events import (
     ApplicationSubmitted,
     ComplianceCheckCompleted,
     ComplianceCheckRequested,
+    ComplianceRulePassed,
     CreditAnalysisCompleted,
     CreditAnalysisRequested,
     FraudScreeningCompleted,
@@ -93,6 +94,13 @@ async def test_human_review_can_finalize_application(dsn: str) -> None:
                 application_id=app_id,
                 regulation_set_version="2026-Q1",
                 checks_required=["REG-001"],
+            ),
+            ComplianceRulePassed(
+                application_id=app_id,
+                rule_id="REG-001",
+                rule_version="2026-Q1",
+                evaluation_timestamp=datetime.now(tz=timezone.utc),
+                evidence_hash="h",
             ),
             ComplianceCheckCompleted(
                 application_id=app_id,

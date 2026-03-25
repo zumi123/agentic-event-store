@@ -32,6 +32,16 @@ async def get_agent_session(store: EventStore, agent_id: str, session_id: str) -
     return [e.model_dump(mode="json") for e in events]
 
 
+async def get_agent_performance(dsn: str, agent_id: str) -> list[dict]:
+    async with await psycopg.AsyncConnection.connect(dsn, row_factory=dict_row) as conn:
+        cur = await conn.execute(
+            "SELECT * FROM agent_performance_ledger WHERE agent_id = %s ORDER BY last_seen_at DESC",
+            (agent_id,),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+
 async def get_compliance(dsn: str, application_id: str, as_of: datetime | None = None) -> dict[str, Any]:
     if as_of is None:
         return await get_current_compliance(dsn, application_id)

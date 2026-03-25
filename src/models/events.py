@@ -228,6 +228,17 @@ class HumanReviewCompleted(BaseEvent):
     override_reason: str | None = None
 
 
+class HumanReviewOverride(BaseEvent):
+    """Allows a subsequent CreditAnalysisCompleted (business rule 3 — analysis churn)."""
+
+    event_type: Literal["HumanReviewOverride"] = "HumanReviewOverride"
+    event_version: int = 1
+
+    application_id: str
+    reviewer_id: str
+    reason: str
+
+
 class ApplicationApproved(BaseEvent):
     event_type: Literal["ApplicationApproved"] = "ApplicationApproved"
     event_version: int = 1
@@ -451,6 +462,7 @@ EVENT_MODELS: dict[str, type[BaseEvent]] = {
     "ComplianceCheckCompleted": ComplianceCheckCompleted,
     "DecisionGenerated": DecisionGenerated,
     "HumanReviewCompleted": HumanReviewCompleted,
+    "HumanReviewOverride": HumanReviewOverride,
     "ApplicationApproved": ApplicationApproved,
     "ApplicationDeclined": ApplicationDeclined,
     "AgentContextLoaded": AgentContextLoaded,

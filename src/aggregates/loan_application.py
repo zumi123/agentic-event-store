@@ -33,6 +33,9 @@ class LoanApplicationAggregate:
     fraud_score: float | None = None
     decision: str | None = None
     agent_sessions_completed: list[str] = field(default_factory=list)
+    # Rule 3: at most one CreditAnalysisCompleted unless HumanReviewOverride allows another.
+    credit_analysis_count: int = 0
+    credit_override_pending: bool = False
 
     @classmethod
     async def load(cls, store: EventStore, application_id: str) -> "LoanApplicationAggregate":
@@ -74,6 +77,9 @@ class LoanApplicationAggregate:
     def assert_allows_credit_analysis_requested(self) -> None:
         # Support-doc flow triggers credit analysis after documents are processed;
         # challenge flow may request credit analysis directly after submission.
+        # Re-run after HumanReviewOverride: ANALYSIS_COMPLETE + credit_override_pending.
+        if self.state == ApplicationState.ANALYSIS_COMPLETE and self.credit_override_pending:
+            return
         self._require_states(
             {ApplicationState.SUBMITTED, ApplicationState.DOCUMENTS_UPLOADED},
             "CreditAnalysisRequested",
@@ -97,6 +103,9 @@ class LoanApplicationAggregate:
         self.requested_amount_usd = float(event.payload["requested_amount_usd"])
 
     def _on_CreditAnalysisRequested(self, event: StoredEvent) -> None:
+        if self.state == ApplicationState.ANALYSIS_COMPLETE and self.credit_override_pending:
+            self.state = ApplicationState.AWAITING_ANALYSIS
+            return
         self._require_states(
             {ApplicationState.SUBMITTED, ApplicationState.DOCUMENTS_UPLOADED},
             "CreditAnalysisRequested",
@@ -116,8 +125,21 @@ class LoanApplicationAggregate:
 
     def _on_CreditAnalysisCompleted(self, event: StoredEvent) -> None:
         self._require_states({ApplicationState.AWAITING_ANALYSIS}, "CreditAnalysisCompleted")
+        if self.credit_analysis_count >= 1 and not self.credit_override_pending:
+            raise DomainError(
+                "Invalid transition on CreditAnalysisCompleted: further analysis requires HumanReviewOverride"
+            )
+        self.credit_analysis_count += 1
+        self.credit_override_pending = False
         self.state = ApplicationState.ANALYSIS_COMPLETE
         self.risk_tier = event.payload.get("risk_tier")
+
+    def _on_HumanReviewOverride(self, event: StoredEvent) -> None:
+        self._require_states(
+            {ApplicationState.ANALYSIS_COMPLETE, ApplicationState.PENDING_DECISION},
+            "HumanReviewOverride",
+        )
+        self.credit_override_pending = True
 
     def _on_ComplianceCheckRequested(self, event: StoredEvent) -> None:
         self._require_states({ApplicationState.ANALYSIS_COMPLETE}, "ComplianceCheckRequested")
@@ -134,6 +156,13 @@ class LoanApplicationAggregate:
             {ApplicationState.COMPLIANCE_REVIEW, ApplicationState.ANALYSIS_COMPLETE},
             "DecisionGenerated",
         )
+        # Rule 4 — confidence floor (regulatory)
+        conf = float(event.payload.get("confidence_score") or 0.0)
+        rec = event.payload.get("recommendation")
+        if conf < 0.6 and rec != "REFER":
+            raise DomainError(
+                "Invalid DecisionGenerated: confidence_score < 0.6 requires recommendation=REFER"
+            )
         self.state = ApplicationState.PENDING_DECISION
         self.decision = event.payload.get("recommendation")
 
