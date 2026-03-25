@@ -25,9 +25,12 @@ def dsn() -> str:
 def apply_schema(dsn: str) -> None:
     schema_path = Path(__file__).resolve().parents[1] / "src" / "schema.sql"
     sql = schema_path.read_text(encoding="utf-8")
+    registry_path = Path(__file__).resolve().parents[1] / "src" / "registry" / "schema.sql"
+    registry_sql = registry_path.read_text(encoding="utf-8")
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
+            cur.execute(registry_sql)
         conn.commit()
 
 
