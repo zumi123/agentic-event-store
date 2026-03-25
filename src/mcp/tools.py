@@ -5,10 +5,12 @@ from typing import Any
 
 from src.commands.handlers import (
     CreditAnalysisCompletedCommand,
+    HumanReviewCompletedCommand,
     StartAgentSessionCommand,
     SubmitApplicationCommand,
     handle_credit_analysis_completed,
     handle_credit_analysis_requested,
+    handle_human_review_completed,
     handle_start_agent_session,
     handle_submit_application,
 )
@@ -56,4 +58,22 @@ async def record_credit_analysis(store: EventStore, **params: Any) -> dict[str, 
 async def request_credit_analysis(store: EventStore, application_id: str, assigned_agent_id: str) -> dict[str, Any]:
     v = await handle_credit_analysis_requested(application_id, assigned_agent_id, store)
     return {"new_stream_version": v}
+
+
+async def record_human_review(store: EventStore, **params: Any) -> dict[str, Any]:
+    try:
+        cmd = HumanReviewCompletedCommand(**params)
+        v = await handle_human_review_completed(cmd, store)
+        return {"new_stream_version": v}
+    except OptimisticConcurrencyError as e:
+        raise ToolError(
+            "OptimisticConcurrencyError",
+            str(e),
+            suggested_action="reload_stream_and_retry",
+            stream_id=e.stream_id,
+            expected_version=e.expected_version,
+            actual_version=e.actual_version,
+        ) from e
+    except Exception as e:  # noqa: BLE001
+        raise ToolError("DomainError", str(e), suggested_action="check_preconditions") from e
 

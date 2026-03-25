@@ -40,6 +40,8 @@ class LedgerMCP:
                 return await tools.record_credit_analysis(self.store, **params)
             if name == "request_credit_analysis":
                 return await tools.request_credit_analysis(self.store, **params)
+            if name == "record_human_review":
+                return await tools.record_human_review(self.store, **params)
             raise ToolError("UnknownTool", f"Unknown tool: {name}")
         except ToolError:
             raise

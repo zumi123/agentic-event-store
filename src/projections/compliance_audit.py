@@ -17,6 +17,8 @@ class ComplianceAuditViewProjection(Projection):
         "ComplianceCheckRequested",
         "ComplianceRulePassed",
         "ComplianceRuleFailed",
+        "ComplianceRuleNoted",
+        "ComplianceCheckCompleted",
     }
 
     async def handle(self, conn: AsyncConnection, event: StoredEvent) -> None:
@@ -54,7 +56,7 @@ async def get_compliance_at(dsn: str, application_id: str, as_of: datetime) -> d
 
 
 def _reduce(events: list[dict]) -> dict[str, Any]:
-    state: dict[str, Any] = {"checks_required": [], "passed": [], "failed": []}
+    state: dict[str, Any] = {"checks_required": [], "passed": [], "failed": [], "noted": []}
     for e in events:
         et = e["event_type"]
         p = e["payload"]
@@ -65,6 +67,11 @@ def _reduce(events: list[dict]) -> dict[str, Any]:
             state["passed"].append({"rule_id": p.get("rule_id"), "rule_version": p.get("rule_version")})
         elif et == "ComplianceRuleFailed":
             state["failed"].append({"rule_id": p.get("rule_id"), "rule_version": p.get("rule_version")})
+        elif et == "ComplianceRuleNoted":
+            state["noted"].append({"rule_id": p.get("rule_id"), "rule_version": p.get("rule_version"), "note_type": p.get("note_type")})
+        elif et == "ComplianceCheckCompleted":
+            state["overall_verdict"] = p.get("overall_verdict")
+            state["has_hard_block"] = p.get("has_hard_block")
     state["status"] = "FAILED" if state["failed"] else ("PASSED" if state["passed"] else "PENDING")
     return state
 

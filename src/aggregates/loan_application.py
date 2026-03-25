@@ -9,6 +9,7 @@ from src.models.events import DomainError, StoredEvent
 
 class ApplicationState(StrEnum):
     SUBMITTED = "Submitted"
+    DOCUMENTS_UPLOADED = "DocumentsUploaded"
     AWAITING_ANALYSIS = "AwaitingAnalysis"
     ANALYSIS_COMPLETE = "AnalysisComplete"
     COMPLIANCE_REVIEW = "ComplianceReview"
@@ -71,10 +72,21 @@ class LoanApplicationAggregate:
             raise DomainError("Application already exists")
 
     def assert_allows_credit_analysis_requested(self) -> None:
-        self._require_states({ApplicationState.SUBMITTED}, "CreditAnalysisRequested")
+        # Support-doc flow triggers credit analysis after documents are processed;
+        # challenge flow may request credit analysis directly after submission.
+        self._require_states(
+            {ApplicationState.SUBMITTED, ApplicationState.DOCUMENTS_UPLOADED},
+            "CreditAnalysisRequested",
+        )
+
+    def assert_allows_document_uploaded(self) -> None:
+        self._require_states({ApplicationState.SUBMITTED}, "DocumentUploaded")
 
     def assert_awaiting_credit_analysis(self) -> None:
         self._require_states({ApplicationState.AWAITING_ANALYSIS}, "CreditAnalysisCompleted")
+
+    def assert_allows_human_review(self) -> None:
+        self._require_states({ApplicationState.PENDING_DECISION}, "HumanReviewCompleted")
 
     # ---- Event handlers (replay): explicit valid transitions ----
 
@@ -85,8 +97,22 @@ class LoanApplicationAggregate:
         self.requested_amount_usd = float(event.payload["requested_amount_usd"])
 
     def _on_CreditAnalysisRequested(self, event: StoredEvent) -> None:
-        self._require_states({ApplicationState.SUBMITTED}, "CreditAnalysisRequested")
+        self._require_states(
+            {ApplicationState.SUBMITTED, ApplicationState.DOCUMENTS_UPLOADED},
+            "CreditAnalysisRequested",
+        )
         self.state = ApplicationState.AWAITING_ANALYSIS
+
+    def _on_DocumentUploadRequested(self, event: StoredEvent) -> None:
+        self._require_states({ApplicationState.SUBMITTED}, "DocumentUploadRequested")
+
+    def _on_DocumentUploaded(self, event: StoredEvent) -> None:
+        # Idempotent: multiple documents (or re-runs) can emit DocumentUploaded.
+        self._require_states(
+            {ApplicationState.SUBMITTED, ApplicationState.DOCUMENTS_UPLOADED},
+            "DocumentUploaded",
+        )
+        self.state = ApplicationState.DOCUMENTS_UPLOADED
 
     def _on_CreditAnalysisCompleted(self, event: StoredEvent) -> None:
         self._require_states({ApplicationState.AWAITING_ANALYSIS}, "CreditAnalysisCompleted")
@@ -115,9 +141,9 @@ class LoanApplicationAggregate:
         self._require_states({ApplicationState.PENDING_DECISION}, "HumanReviewCompleted")
         final = event.payload.get("final_decision")
         if final == "APPROVE":
-            self.state = ApplicationState.FINAL_APPROVED
+            self.state = ApplicationState.APPROVED_PENDING_HUMAN
         elif final == "DECLINE":
-            self.state = ApplicationState.FINAL_DECLINED
+            self.state = ApplicationState.DECLINED_PENDING_HUMAN
         else:
             self.state = ApplicationState.PENDING_DECISION
 

@@ -9,9 +9,12 @@ from src.aggregates.loan_application import LoanApplicationAggregate
 from src.event_store import EventStore
 from src.models.events import (
     AgentContextLoaded,
+    ApplicationApproved,
     ApplicationSubmitted,
+    ApplicationDeclined,
     CreditAnalysisCompleted,
     CreditAnalysisRequested,
+    HumanReviewCompleted,
 )
 
 
@@ -53,6 +56,18 @@ class CreditAnalysisCompletedCommand(BaseModel):
     recommended_limit_usd: float
     duration_ms: int
     input_data_hash: str
+    correlation_id: str | None = None
+    causation_id: str | None = None
+
+
+class HumanReviewCompletedCommand(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_id: str
+    reviewer_id: str
+    override: bool = False
+    final_decision: str  # APPROVE | DECLINE | REFER
+    override_reason: str | None = None
     correlation_id: str | None = None
     causation_id: str | None = None
 
@@ -153,6 +168,54 @@ async def handle_credit_analysis_requested(application_id: str, assigned_agent_i
         stream_id=f"loan-{application_id}",
         events=[ev],
         expected_version=app.expected_version_for_append(),
+        aggregate_type="LoanApplication",
+    )
+
+
+async def handle_human_review_completed(cmd: HumanReviewCompletedCommand, store: EventStore) -> int:
+    app = await LoanApplicationAggregate.load(store, cmd.application_id)
+    stream_id = f"loan-{cmd.application_id}"
+
+    app.assert_allows_human_review()
+
+    events = [
+        HumanReviewCompleted(
+            application_id=cmd.application_id,
+            reviewer_id=cmd.reviewer_id,
+            override=cmd.override,
+            final_decision=cmd.final_decision,  # type: ignore[arg-type]
+            override_reason=cmd.override_reason,
+        )
+    ]
+
+    now = datetime.now(tz=timezone.utc)
+    if cmd.final_decision == "APPROVE":
+        events.append(
+            ApplicationApproved(
+                application_id=cmd.application_id,
+                approved_amount_usd=float(app.requested_amount_usd or 0.0),
+                interest_rate=0.12,
+                conditions=[],
+                approved_by=cmd.reviewer_id,
+                effective_date=now,
+            )
+        )
+    elif cmd.final_decision == "DECLINE":
+        events.append(
+            ApplicationDeclined(
+                application_id=cmd.application_id,
+                decline_reasons=["Human review decline"],
+                declined_by=cmd.reviewer_id,
+                adverse_action_notice_required=True,
+            )
+        )
+
+    return await store.append(
+        stream_id=stream_id,
+        events=events,
+        expected_version=app.expected_version_for_append(),
+        correlation_id=cmd.correlation_id,
+        causation_id=cmd.causation_id,
         aggregate_type="LoanApplication",
     )
 

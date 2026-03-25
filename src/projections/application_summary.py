@@ -13,6 +13,11 @@ class ApplicationSummaryProjection(Projection):
         "ApplicationSubmitted",
         "CreditAnalysisRequested",
         "CreditAnalysisCompleted",
+        "FraudScreeningCompleted",
+        "ComplianceCheckRequested",
+        "ComplianceRulePassed",
+        "ComplianceRuleFailed",
+        "ComplianceCheckCompleted",
         "DecisionGenerated",
         "HumanReviewCompleted",
         "ApplicationApproved",
@@ -55,6 +60,34 @@ class ApplicationSummaryProjection(Projection):
             await conn.execute(
                 "UPDATE application_summary SET state=%s, risk_tier=%s, last_event_type=%s, last_event_at=%s WHERE application_id=%s",
                 ("AnalysisComplete", payload.get("risk_tier"), et, event.recorded_at, application_id),
+            )
+        elif et == "FraudScreeningCompleted":
+            await conn.execute(
+                "UPDATE application_summary SET fraud_score=%s, last_event_type=%s, last_event_at=%s WHERE application_id=%s",
+                (payload.get("fraud_score"), et, event.recorded_at, application_id),
+            )
+        elif et == "ComplianceCheckRequested":
+            await conn.execute(
+                "UPDATE application_summary SET state=%s, compliance_status=%s, last_event_type=%s, last_event_at=%s WHERE application_id=%s",
+                ("ComplianceReview", "PENDING", et, event.recorded_at, application_id),
+            )
+        elif et == "ComplianceRuleFailed":
+            await conn.execute(
+                "UPDATE application_summary SET compliance_status=%s, last_event_type=%s, last_event_at=%s WHERE application_id=%s",
+                ("FAILED", et, event.recorded_at, application_id),
+            )
+        elif et == "ComplianceRulePassed":
+            # Keep as PENDING until completed, but record last_event.
+            await conn.execute(
+                "UPDATE application_summary SET last_event_type=%s, last_event_at=%s WHERE application_id=%s",
+                (et, event.recorded_at, application_id),
+            )
+        elif et == "ComplianceCheckCompleted":
+            verdict = payload.get("overall_verdict")
+            status = "PASSED" if verdict == "CLEAR" else ("FAILED" if verdict == "BLOCKED" else "CONDITIONAL")
+            await conn.execute(
+                "UPDATE application_summary SET compliance_status=%s, last_event_type=%s, last_event_at=%s WHERE application_id=%s",
+                (status, et, event.recorded_at, application_id),
             )
         elif et == "DecisionGenerated":
             await conn.execute(
